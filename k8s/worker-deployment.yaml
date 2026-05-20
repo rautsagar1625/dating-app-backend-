@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: velvet-workers
+  namespace: velvet
+  labels:
+    app: velvet-workers
+    component: worker
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: velvet-workers
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge:       1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: velvet-workers
+        component: worker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "9100"
+        prometheus.io/path:   "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 120  # Allow in-flight jobs to complete
+
+      topologySpreadConstraints:
+        - maxSkew:           1
+          topologyKey:       topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: velvet-workers
+
+      containers:
+        - name: worker
+          image: ghcr.io/rautsagar1625/dating-app-backend-/api:latest
+          imagePullPolicy: Always
+          command: ["node", "dist/worker.js"]
+
+          envFrom:
+            - secretRef:
+                name: velvet-api-secrets
+            - configMapRef:
+                name: velvet-api-config
+
+          env:
+            - name: WORKER_MODE
+              value: "true"
+            - name: WORKER_CONCURRENCY
+              value: "10"
+
+          resources:
+            requests:
+              cpu:    "250m"
+              memory: "512Mi"
+            limits:
+              cpu:    "2"
+              memory: "4Gi"
+
+          # Workers don't serve HTTP — use process check
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "pgrep -f 'node dist/worker.js' > /dev/null"
+            initialDelaySeconds: 15
+            periodSeconds:       30
+            failureThreshold:    3
+
+          lifecycle:
+            preStop:
+              exec:
+                # Signal worker to drain gracefully before shutdown
+                command: ["/bin/sh", "-c", "kill -SIGTERM 1 && sleep 30"]
+
+          securityContext:
+            runAsNonRoot:             true
+            runAsUser:                1001
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+
+      serviceAccountName: velvet-api-sa

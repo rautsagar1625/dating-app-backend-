@@ -1,0 +1,83 @@
+name: Dependency Audit
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Every Monday at 9am UTC
+  workflow_dispatch:
+
+jobs:
+  audit:
+    name: Security & License Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+
+      - name: npm security audit
+        id: npm-audit
+        run: |
+          npm audit --audit-level=high --json > audit-results.json || true
+          VULN_COUNT=$(cat audit-results.json | python3 -c "
+          import json, sys
+          d = json.load(sys.stdin)
+          highs = d.get('metadata', {}).get('vulnerabilities', {})
+          total = highs.get('high', 0) + highs.get('critical', 0)
+          print(total)")
+          echo "vuln_count=$VULN_COUNT" >> $GITHUB_OUTPUT
+          if [ "$VULN_COUNT" -gt "0" ]; then
+            echo "Found $VULN_COUNT high/critical vulnerabilities"
+            npm audit --audit-level=high
+          fi
+
+      - name: License check
+        id: license-check
+        run: |
+          npx license-checker --summary --failOn "GPL-2.0;GPL-3.0;AGPL-3.0;LGPL-2.0;LGPL-2.1;LGPL-3.0" \
+            --excludePrivatePackages 2>&1 | tee license-results.txt || echo "license_fail=true" >> $GITHUB_OUTPUT
+
+      - name: Create issue if vulnerabilities found
+        if: steps.npm-audit.outputs.vuln_count > 0 || steps.license-check.outputs.license_fail == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const vulnCount = '${{ steps.npm-audit.outputs.vuln_count }}';
+            const licenseFail = '${{ steps.license-check.outputs.license_fail }}';
+            const body = [
+              '## Weekly Dependency Audit Results',
+              '',
+              vulnCount > 0 ? `### ⚠️ ${vulnCount} High/Critical Vulnerabilities Found` : '',
+              vulnCount > 0 ? 'Run `npm audit` locally for details and `npm audit fix` to auto-fix.' : '',
+              '',
+              licenseFail === 'true' ? '### 🚫 GPL License Detected' : '',
+              licenseFail === 'true' ? 'A dependency with a GPL-incompatible license was found. Review `npx license-checker --summary`.' : '',
+              '',
+              `Audit run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`,
+            ].filter(Boolean).join('\n');
+
+            // Check for existing open issue
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'security,dependencies',
+              state: 'open',
+            });
+
+            if (issues.data.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `Dependency security audit: ${new Date().toISOString().split('T')[0]}`,
+                body,
+                labels: ['security', 'dependencies'],
+              });
+            }

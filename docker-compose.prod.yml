@@ -1,0 +1,105 @@
+# Production overrides
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# This file only overrides what differs from the base docker-compose.yml.
+# Secrets come from .env.production — never hardcode them here.
+
+name: velvet-prod
+
+services:
+
+  postgres:
+    restart: always
+    # In production, postgres should be managed (AWS RDS, Supabase, etc.)
+    # Remove this service and point DATABASE_URL at the managed instance.
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB:       ${POSTGRES_DB}
+    ports: []           # don't expose DB port to the host in prod
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+
+  redis:
+    restart: always
+    # In production, prefer AWS ElastiCache or Redis Cloud.
+    # Remove this service and set REDIS_URL to the managed instance.
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    ports: []
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+
+  # MinIO is replaced by real AWS S3 in production.
+  # Defined here as a no-op so the base compose's depends_on chain resolves cleanly.
+  minio:
+    image: alpine:3.19
+    command: echo "Using real AWS S3"
+    restart: "no"
+
+  minio-setup:
+    image: alpine:3.19
+    command: echo "Using real AWS S3 — no bucket init needed"
+    restart: "no"
+    depends_on: {}   # clear the minio dependency from base
+
+  migrate:
+    build:
+      context: .
+      target:  builder
+    restart: "no"
+    env_file: .env.production
+    command:  npx prisma migrate deploy
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      target:  production    # lean image, no devDeps, non-root user
+    restart: always
+    ports:
+      - "3002:3002"
+    volumes: []              # no source mount in prod
+    env_file: .env.production
+    environment:
+      NODE_ENV: production
+    deploy:
+      replicas: 2            # run 2 replicas behind the load balancer
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+      restart_policy:
+        condition:    on-failure
+        delay:        5s
+        max_attempts: 3
+    healthcheck:
+      test:         ["CMD", "wget", "-qO-", "http://localhost:3002/live"]
+      interval:     30s
+      timeout:      5s
+      start_period: 40s
+      retries:      3
+    # Explicitly override to exclude the dev-only minio-setup dependency
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy

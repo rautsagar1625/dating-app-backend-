@@ -1,0 +1,335 @@
+{
+  "title": "Velvet — Launch Day Operations",
+  "uid": "velvet-launch-ops",
+  "tags": ["velvet", "launch", "production"],
+  "timezone": "utc",
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+
+    { "type": "row", "title": "System Health", "id": 1, "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 }, "collapsed": false },
+
+    {
+      "id": 2, "type": "stat", "title": "API Error Rate",
+      "gridPos": { "x": 0, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m])) * 100",
+        "legendFormat": "Error %"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 2 },
+            { "color": "red", "value": 5 }
+          ]},
+          "mappings": []
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "colorMode": "background" }
+    },
+
+    {
+      "id": 3, "type": "stat", "title": "API p95 Latency",
+      "gridPos": { "x": 4, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) * 1000",
+        "legendFormat": "p95 ms"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 500 },
+            { "color": "red", "value": 1000 }
+          ]}
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+
+    {
+      "id": 4, "type": "stat", "title": "Active WebSocket Connections",
+      "gridPos": { "x": 8, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "velvet_socket_connections_active",
+        "legendFormat": "Connections"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 8000 },
+            { "color": "red", "value": 15000 }
+          ]}
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+    },
+
+    {
+      "id": 5, "type": "stat", "title": "Total Queue Depth",
+      "gridPos": { "x": 12, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "sum(bullmq_queue_depth)",
+        "legendFormat": "Jobs waiting"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 1000 },
+            { "color": "red", "value": 10000 }
+          ]}
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+
+    {
+      "id": 6, "type": "stat", "title": "DB Pool Utilization",
+      "gridPos": { "x": 16, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "velvet_db_connections_active / velvet_db_connections_max * 100",
+        "legendFormat": "Pool %"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 70 },
+            { "color": "red", "value": 90 }
+          ]}
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+
+    {
+      "id": 7, "type": "stat", "title": "Active API Pods",
+      "gridPos": { "x": 20, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "count(up{job=\"velvet-api\"} == 1)",
+        "legendFormat": "Pods"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "yellow", "value": 2 },
+            { "color": "green", "value": 3 }
+          ]}
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+
+    { "type": "row", "title": "Traffic", "id": 10, "gridPos": { "x": 0, "y": 5, "w": 24, "h": 1 }, "collapsed": false },
+
+    {
+      "id": 11, "type": "timeseries", "title": "HTTP Requests/sec by Status",
+      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(rate(http_requests_total{status=~\"2..\"}[1m]))", "legendFormat": "2xx" },
+        { "expr": "sum(rate(http_requests_total{status=~\"4..\"}[1m]))", "legendFormat": "4xx" },
+        { "expr": "sum(rate(http_requests_total{status=~\"5..\"}[1m]))", "legendFormat": "5xx" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "2xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "4xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "5xx" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+        ]
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+
+    {
+      "id": 12, "type": "timeseries", "title": "API Latency Percentiles",
+      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.90, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "p90" },
+        { "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) * 1000", "legendFormat": "p99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "options": { "tooltip": { "mode": "multi" } }
+    },
+
+    { "type": "row", "title": "Revenue", "id": 20, "gridPos": { "x": 0, "y": 14, "w": 24, "h": 1 }, "collapsed": false },
+
+    {
+      "id": 21, "type": "stat", "title": "Payments Succeeded (1h)",
+      "gridPos": { "x": 0, "y": 15, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "increase(velvet_payment_success_total[1h])", "legendFormat": "Payments" }],
+      "fieldConfig": { "defaults": { "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+    },
+
+    {
+      "id": 22, "type": "stat", "title": "Payment Failure Rate",
+      "gridPos": { "x": 6, "y": 15, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "rate(velvet_payment_failed_total[5m]) / rate(velvet_payment_session_created_total[5m]) * 100",
+        "legendFormat": "Failure %"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 5 },
+            { "color": "red", "value": 10 }
+          ]}
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+
+    {
+      "id": 23, "type": "stat", "title": "Active Subscriptions",
+      "gridPos": { "x": 12, "y": 15, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "velvet_subscriptions_active_total", "legendFormat": "Active" }],
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" }
+    },
+
+    {
+      "id": 24, "type": "timeseries", "title": "Payment Volume (1m rate)",
+      "gridPos": { "x": 18, "y": 15, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "rate(velvet_payment_success_total[1m])", "legendFormat": "Success/s" },
+        { "expr": "rate(velvet_payment_failed_total[1m])", "legendFormat": "Failed/s" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+
+    { "type": "row", "title": "Queue Health", "id": 30, "gridPos": { "x": 0, "y": 19, "w": 24, "h": 1 }, "collapsed": false },
+
+    {
+      "id": 31, "type": "timeseries", "title": "Queue Depth per Queue",
+      "gridPos": { "x": 0, "y": 20, "w": 16, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "bullmq_queue_depth{queue=\"webhook-processing\"}", "legendFormat": "webhook-processing" },
+        { "expr": "bullmq_queue_depth{queue=\"notification\"}", "legendFormat": "notification" },
+        { "expr": "bullmq_queue_depth{queue=\"media-processing\"}", "legendFormat": "media-processing" },
+        { "expr": "bullmq_queue_depth{queue=\"subscription\"}", "legendFormat": "subscription" },
+        { "expr": "bullmq_queue_depth{queue=\"moderation\"}", "legendFormat": "moderation" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 32, "type": "stat", "title": "Active Workers",
+      "gridPos": { "x": 16, "y": 20, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "bullmq_workers_active", "legendFormat": "Workers" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "yellow", "value": 1 },
+            { "color": "green", "value": 2 }
+          ]}
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+
+    {
+      "id": 33, "type": "stat", "title": "Failed Jobs (1h)",
+      "gridPos": { "x": 20, "y": 20, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "increase(bullmq_jobs_failed_total[1h])", "legendFormat": "Failed" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 10 },
+            { "color": "red", "value": 100 }
+          ]}
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" }
+    },
+
+    { "type": "row", "title": "WebSocket & Realtime", "id": 40, "gridPos": { "x": 0, "y": 28, "w": 24, "h": 1 }, "collapsed": false },
+
+    {
+      "id": 41, "type": "timeseries", "title": "WebSocket Connections",
+      "gridPos": { "x": 0, "y": 29, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "velvet_socket_connections_active", "legendFormat": "Active connections" },
+        { "expr": "rate(velvet_socket_connections_total[1m]) * 60", "legendFormat": "New connections/min" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+
+    {
+      "id": 42, "type": "timeseries", "title": "Message Delivery",
+      "gridPos": { "x": 12, "y": 29, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "rate(velvet_socket_messages_delivered_total[1m]) * 60", "legendFormat": "Delivered/min" },
+        { "expr": "rate(velvet_socket_message_failed_total[1m]) * 60", "legendFormat": "Failed/min" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Failed/min" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+        ]
+      }
+    },
+
+    { "type": "row", "title": "Infrastructure", "id": 50, "gridPos": { "x": 0, "y": 37, "w": 24, "h": 1 }, "collapsed": false },
+
+    {
+      "id": 51, "type": "timeseries", "title": "CPU Utilization by Pod",
+      "gridPos": { "x": 0, "y": 38, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"velvet\",container=\"api\"}[5m])) by (pod) * 100",
+        "legendFormat": "{{ pod }}"
+      }],
+      "fieldConfig": { "defaults": { "unit": "percent", "max": 100 } }
+    },
+
+    {
+      "id": 52, "type": "timeseries", "title": "Memory Utilization by Pod",
+      "gridPos": { "x": 12, "y": 38, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{
+        "expr": "sum(container_memory_working_set_bytes{namespace=\"velvet\",container=\"api\"}) by (pod) / 1024 / 1024",
+        "legendFormat": "{{ pod }} (MB)"
+      }],
+      "fieldConfig": { "defaults": { "unit": "decmbytes" } }
+    }
+  ]
+}

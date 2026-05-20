@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: velvet-api-config
+  namespace: velvet
+data:
+  NODE_ENV:                "production"
+  PORT:                    "3002"
+  API_VERSION:             "v1"
+  DB_POOL_MIN:             "5"
+  DB_POOL_MAX:             "20"
+  DB_STATEMENT_TIMEOUT_MS: "10000"
+  REDIS_TLS_ENABLED:       "true"
+  REDIS_KEY_PREFIX:        "velvet:"
+  JWT_ACCESS_EXPIRES:      "15m"
+  JWT_REFRESH_EXPIRES:     "30d"
+  RATE_LIMIT_WINDOW_MS:    "60000"
+  RATE_LIMIT_MAX_REQUESTS: "100"
+  WORKER_CONCURRENCY:      "10"
+  MAX_JOBS_PER_WORKER:     "100"
+  MAX_UPLOAD_SIZE_BYTES:   "52428800"
+  STRIPE_API_VERSION:      "2024-06-20"
+  WEBHOOK_TOLERANCE_SECS:  "300"
+  SENTRY_ENVIRONMENT:      "production"
+  AWS_REGION:              "us-east-1"
+  ALLOWED_MIME_TYPES:      "image/jpeg,image/png,image/webp,image/avif,video/mp4,audio/aac,audio/mpeg"

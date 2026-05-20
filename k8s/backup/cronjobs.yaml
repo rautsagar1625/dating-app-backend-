@@ -1,0 +1,339 @@
+# All backup CronJobs in a single file for easy management.
+# All jobs run in the velvet-backup namespace using the velvet-backup image.
+# Jobs run with activeDeadlineSeconds to prevent runaway pods.
+# Failed jobs notify via SLACK_WEBHOOK_URL (set in the secret).
+
+---
+# ── PostgreSQL Logical Backup — daily at 02:00 UTC ────────────────────────────
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pg-logical-backup
+  namespace: velvet-backup
+  labels:
+    app: velvet-backup
+    job-type: pg-logical
+spec:
+  schedule: "0 2 * * *"           # 02:00 UTC daily
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid        # never overlap — prevent double-backup corruption
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  startingDeadlineSeconds: 3600    # skip if can't start within 1h of scheduled time
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 3600  # kill job if it runs longer than 1 hour
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: velvet-backup
+            job-type: pg-logical
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: velvet-backup
+          containers:
+            - name: backup
+              image: velvet-backup:latest
+              imagePullPolicy: Always
+              command: ["/scripts/pg-logical-backup.sh"]
+              envFrom:
+                - secretRef:
+                    name: velvet-backup-secrets
+              env:
+                - name: VELVET_ENV
+                  value: "production"
+                - name: NOTIFY_ON_SUCCESS
+                  value: "false"
+              resources:
+                requests: { cpu: "250m", memory: "512Mi" }
+                limits:   { cpu: "1",    memory: "2Gi"  }
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+
+---
+# ── WAL-G Base Backup — daily at 03:00 UTC (after logical) ────────────────────
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pg-walg-backup
+  namespace: velvet-backup
+  labels:
+    app: velvet-backup
+    job-type: pg-walg
+spec:
+  schedule: "0 3 * * *"
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 7200
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app: velvet-backup
+            job-type: pg-walg
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: velvet-backup
+          containers:
+            - name: backup
+              image: velvet-backup:latest
+              imagePullPolicy: Always
+              command: ["/scripts/pg-walg-backup.sh"]
+              envFrom:
+                - secretRef:
+                    name: velvet-backup-secrets
+              env:
+                - name: WALG_RETAIN_FULL_BACKUPS
+                  value: "7"
+              resources:
+                requests: { cpu: "500m", memory: "1Gi" }
+                limits:   { cpu: "2",    memory: "4Gi" }
+
+---
+# ── Redis Backup — every 12 hours ──────────────────────────────────────────────
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: redis-backup
+  namespace: velvet-backup
+  labels:
+    app: velvet-backup
+    job-type: redis
+spec:
+  schedule: "0 */12 * * *"       # 00:00 and 12:00 UTC
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  startingDeadlineSeconds: 1800
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 1800
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: velvet-backup
+            job-type: redis
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: velvet-backup
+          containers:
+            - name: backup
+              image: velvet-backup:latest
+              imagePullPolicy: Always
+              command: ["/scripts/redis-backup.sh"]
+              envFrom:
+                - secretRef:
+                    name: velvet-backup-secrets
+              env:
+                - name: REDIS_RDB_PATH
+                  value: "/data/dump.rdb"
+              resources:
+                requests: { cpu: "100m", memory: "256Mi" }
+                limits:   { cpu: "500m", memory: "1Gi"  }
+              volumeMounts:
+                - name: redis-data
+                  mountPath: /data
+                  readOnly: true
+          volumes:
+            - name: redis-data
+              persistentVolumeClaim:
+                claimName: redis-data-pvc
+                readOnly: true
+
+---
+# ── Media Sync — every 6 hours ─────────────────────────────────────────────────
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: media-sync
+  namespace: velvet-backup
+  labels:
+    app: velvet-backup
+    job-type: media
+spec:
+  schedule: "0 */6 * * *"
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 7200
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: velvet-backup
+            job-type: media
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: velvet-backup
+          containers:
+            - name: backup
+              image: velvet-backup:latest
+              imagePullPolicy: Always
+              command: ["/scripts/media-sync.sh"]
+              envFrom:
+                - secretRef:
+                    name: velvet-backup-secrets
+              env:
+                - name: MEDIA_LOCAL_PATH
+                  value: "/app/uploads"
+              resources:
+                requests: { cpu: "100m", memory: "256Mi" }
+                limits:   { cpu: "500m", memory: "1Gi"  }
+              volumeMounts:
+                - name: uploads
+                  mountPath: /app/uploads
+                  readOnly: true
+          volumes:
+            - name: uploads
+              persistentVolumeClaim:
+                claimName: uploads-pvc
+                readOnly: true
+
+---
+# ── Backup Integrity Verification — daily at 05:00 UTC ────────────────────────
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: verify-backup
+  namespace: velvet-backup
+  labels:
+    app: velvet-backup
+    job-type: verify
+spec:
+  schedule: "0 5 * * *"
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 10
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 3600
+      backoffLimit: 0              # never retry — alert on first failure
+      template:
+        metadata:
+          labels:
+            app: velvet-backup
+            job-type: verify
+        spec:
+          restartPolicy: Never
+          serviceAccountName: velvet-backup
+          containers:
+            - name: verify
+              image: velvet-backup:latest
+              imagePullPolicy: Always
+              command: ["/scripts/verify-backup.sh"]
+              envFrom:
+                - secretRef:
+                    name: velvet-backup-secrets
+              resources:
+                requests: { cpu: "250m", memory: "512Mi" }
+                limits:   { cpu: "1",    memory: "2Gi"  }
+
+---
+# ── Restore Test — weekly on Sunday at 04:00 UTC ──────────────────────────────
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: restore-test
+  namespace: velvet-backup
+  labels:
+    app: velvet-backup
+    job-type: restore-test
+spec:
+  schedule: "0 4 * * 0"          # Sunday 04:00 UTC
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 4
+  failedJobsHistoryLimit: 5
+  startingDeadlineSeconds: 7200
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 5400  # 90 minutes max
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app: velvet-backup
+            job-type: restore-test
+        spec:
+          restartPolicy: Never
+          serviceAccountName: velvet-backup
+          containers:
+            - name: restore-test
+              image: velvet-backup:latest
+              imagePullPolicy: Always
+              command: ["/scripts/restore-test.sh"]
+              envFrom:
+                - secretRef:
+                    name: velvet-backup-secrets
+              env:
+                - name: RESTORE_TEST_RTO_MINUTES
+                  value: "30"
+              resources:
+                requests: { cpu: "500m", memory: "1Gi" }
+                limits:   { cpu: "2",    memory: "4Gi" }
+              volumeMounts:
+                - name: docker-sock
+                  mountPath: /var/run/docker.sock
+          volumes:
+            - name: docker-sock
+              hostPath:
+                path: /var/run/docker.sock
+
+---
+# ── Retention Cleanup — weekly on Monday at 01:00 UTC ─────────────────────────
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: retention-cleanup
+  namespace: velvet-backup
+  labels:
+    app: velvet-backup
+    job-type: retention
+spec:
+  schedule: "0 1 * * 1"          # Monday 01:00 UTC
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 4
+  failedJobsHistoryLimit: 5
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 3600
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: velvet-backup
+            job-type: retention
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: velvet-backup
+          containers:
+            - name: cleanup
+              image: velvet-backup:latest
+              imagePullPolicy: Always
+              command: ["/scripts/retention-cleanup.sh"]
+              envFrom:
+                - secretRef:
+                    name: velvet-backup-secrets
+              resources:
+                requests: { cpu: "100m", memory: "128Mi" }
+                limits:   { cpu: "500m", memory: "512Mi" }

@@ -1,0 +1,24 @@
+# Dependencies — always rebuilt inside the container for the correct platform
+node_modules
+
+# Compiled output — rebuilt by tsc in the image
+dist
+
+# Secrets — never bake into the image
+.env
+.env.*
+!.env.example
+
+# Uploads — runtime data, not part of the image
+uploads/
+
+# Dev/tooling
+.git
+.gitignore
+*.log
+coverage/
+.nyc_output/
+
+# Docs & infra configs (not needed at runtime)
+docs/
+k8s/

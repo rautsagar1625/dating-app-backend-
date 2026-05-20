@@ -1,0 +1,121 @@
+name: Mobile Build (EAS)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'EAS build profile'
+        required: true
+        type: choice
+        options: [development, staging, production]
+        default: staging
+
+jobs:
+  build-ios:
+    name: iOS Build (${{ inputs.profile || 'staging' }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.profile == 'production' && 'production' || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Setup Expo
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies (frontend)
+        working-directory: ../dating-app-Frontend
+        run: npm ci
+        continue-on-error: true
+
+      - name: Build iOS
+        working-directory: ../dating-app-Frontend
+        run: |
+          eas build \
+            --platform ios \
+            --profile ${{ inputs.profile || 'staging' }} \
+            --non-interactive \
+            --json > ios-build.json
+          BUILD_URL=$(cat ios-build.json | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('buildUrl','N/A'))")
+          echo "IOS_BUILD_URL=$BUILD_URL" >> $GITHUB_ENV
+        continue-on-error: true
+
+      - name: Notify Slack (iOS)
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            { "text": "📱 iOS build (${{ inputs.profile || 'staging' }}) complete: ${{ env.IOS_BUILD_URL }}" }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        continue-on-error: true
+
+  build-android:
+    name: Android Build (${{ inputs.profile || 'staging' }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.profile == 'production' && 'production' || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Setup Expo
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Build Android
+        working-directory: ../dating-app-Frontend
+        run: |
+          eas build \
+            --platform android \
+            --profile ${{ inputs.profile || 'staging' }} \
+            --non-interactive \
+            --json > android-build.json
+          BUILD_URL=$(cat android-build.json | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('buildUrl','N/A'))")
+          echo "ANDROID_BUILD_URL=$BUILD_URL" >> $GITHUB_ENV
+        continue-on-error: true
+
+      - name: Notify Slack (Android)
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            { "text": "🤖 Android build (${{ inputs.profile || 'staging' }}) complete: ${{ env.ANDROID_BUILD_URL }}" }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        continue-on-error: true
+
+  submit-production:
+    name: Submit to Stores
+    runs-on: ubuntu-latest
+    needs: [build-ios, build-android]
+    if: inputs.profile == 'production'
+    environment: production  # requires reviewer approval
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Submit iOS to App Store
+        working-directory: ../dating-app-Frontend
+        run: eas submit --platform ios --profile production --non-interactive --latest
+        continue-on-error: true
+
+      - name: Submit Android to Play Store
+        working-directory: ../dating-app-Frontend
+        run: eas submit --platform android --profile production --non-interactive --latest
+        continue-on-error: true

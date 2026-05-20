@@ -1,0 +1,92 @@
+# ── HPA for API ───────────────────────────────────────────────────────────────
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: velvet-api-hpa
+  namespace: velvet
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: velvet-api
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type:               AverageUtilization
+          averageUtilization: 60
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type:               AverageUtilization
+          averageUtilization: 70
+    - type: Pods
+      pods:
+        metric:
+          name: http_requests_per_second
+        target:
+          type:         AverageValue
+          averageValue: "100"
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type:          Pods
+          value:         2
+          periodSeconds: 30
+        - type:          Percent
+          value:         50
+          periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300  # 5-minute cooldown prevents flapping
+      policies:
+        - type:          Pods
+          value:         1
+          periodSeconds: 60
+      selectPolicy: Min
+---
+# ── KEDA ScaledObject for Workers (queue-depth-based) ─────────────────────────
+# Requires KEDA installed: https://keda.sh
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: velvet-workers-scaledobject
+  namespace: velvet
+spec:
+  scaleTargetRef:
+    name: velvet-workers
+  pollingInterval: 15
+  cooldownPeriod:  300
+  minReplicaCount: 2
+  maxReplicaCount: 15
+  triggers:
+    - type: redis
+      metadata:
+        address:       velvet-redis:6379
+        listName:      "bull:webhook-processing:wait"
+        listLength:    "500"    # scale up when >500 jobs waiting
+    - type: redis
+      metadata:
+        address:   velvet-redis:6379
+        listName:  "bull:notification:wait"
+        listLength: "1000"
+    - type: redis
+      metadata:
+        address:   velvet-redis:6379
+        listName:  "bull:media-processing:wait"
+        listLength: "100"
+  advanced:
+    restoreToOriginalReplicaCount: true
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+            - type:          Pods
+              value:         1
+              periodSeconds: 120

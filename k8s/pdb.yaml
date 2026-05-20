@@ -1,0 +1,21 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: velvet-api-pdb
+  namespace: velvet
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: velvet-api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: velvet-workers-pdb
+  namespace: velvet
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: velvet-workers

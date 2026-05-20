@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: velvet-api
+  namespace: velvet
+  labels:
+    app: velvet-api
+spec:
+  type:     ClusterIP
+  selector:
+    app: velvet-api
+  ports:
+    - name:       http
+      port:       80
+      targetPort: 3002
+      protocol:   TCP
+---
+# Socket.IO service with sticky sessions (ClientIP affinity)
+# Required so WebSocket upgrade lands on the same pod for the handshake
+apiVersion: v1
+kind: Service
+metadata:
+  name: velvet-api-socketio
+  namespace: velvet
+  labels:
+    app: velvet-api
+    component: socketio
+spec:
+  type:            ClusterIP
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600  # 1h — Socket.IO connections are long-lived
+  selector:
+    app: velvet-api
+  ports:
+    - name:       ws
+      port:       80
+      targetPort: 3002
+      protocol:   TCP

@@ -1,0 +1,169 @@
+# Local development stack
+# Usage:
+#   docker compose up            — start everything
+#   docker compose up api        — start only the API (and its deps)
+#   docker compose logs -f api   — stream API logs
+#   docker compose down -v       — stop and wipe all volumes
+
+name: velvet-dev
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     velvet
+      POSTGRES_PASSWORD: velvet
+      POSTGRES_DB:       velvet_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:     ["CMD-SHELL", "pg_isready -U velvet -d velvet_dev"]
+      interval: 5s
+      timeout:  5s
+      retries:  10
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6400:6379"
+    volumes:
+
+      - redis_data:/data
+    healthcheck:
+      test:     ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout:  3s
+      retries:  10
+
+  # ── MinIO (S3-compatible local object storage) ──────────────────────────────
+  # Access the web console at http://localhost:9001  (minioadmin / minioadmin)
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web console
+    environment:
+      MINIO_ROOT_USER:     minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test:     ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout:  5s
+      retries:  5
+
+  # ── MinIO bucket init (runs once, then exits) ───────────────────────────────
+  minio-setup:
+    image: minio/mc:latest
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/velvet-media-public &&
+        mc mb --ignore-existing local/velvet-media-private &&
+        mc mb --ignore-existing local/velvet-media-chat &&
+        mc mb --ignore-existing local/velvet-media-temp &&
+        mc mb --ignore-existing local/velvet-media-quarantine &&
+        mc anonymous set public local/velvet-media-public &&
+        echo 'All buckets ready.'
+      "
+
+  # ── Database migrations (runs once, then exits) ─────────────────────────────
+  migrate:
+    build:
+      context: .
+      target:  builder        # builder stage has the prisma CLI
+    restart: "no"
+    command: npx prisma migrate deploy
+    environment:
+      DATABASE_URL: postgresql://velvet:velvet@postgres:5432/velvet_dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── API (hot-reload via nodemon + ts-node) ───────────────────────────────────
+  api:
+    build:
+      context: .
+      target:  builder        # has devDeps (ts-node, nodemon) for hot-reload
+    restart: unless-stopped
+    command: npm run dev
+    ports:
+      - "3002:3002"
+    volumes:
+      # Mount source so nodemon picks up changes instantly
+      - ./src:/app/src
+      - ./prisma:/app/prisma
+      # Anonymous volume prevents the host's macOS node_modules from
+      # overwriting the container's Linux-compiled modules
+      - /app/node_modules
+    environment:
+      NODE_ENV:     development
+      PORT:         3002
+      APP_URL:      http://localhost:3002
+
+      # Database
+      DATABASE_URL: postgresql://velvet:velvet@postgres:5432/velvet_dev
+      DB_POOL_MIN:  2
+      DB_POOL_MAX:  10
+
+      # Redis
+      REDIS_URL: redis://redis:6379
+
+      # JWT (dev-only secrets — never use in production)
+      JWT_ACCESS_SECRET:   dev-access-secret-min-32-characters-long
+      JWT_REFRESH_SECRET:  dev-refresh-secret-min-32-characters-long
+      JWT_ACCESS_EXPIRES:  15m
+      JWT_REFRESH_EXPIRES: 30d
+
+      # Encryption (dev-only — exactly 64 hex chars = 32 bytes)
+      ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+
+      # CORS
+      CORS_ORIGINS: http://localhost:3000,http://localhost:19006
+
+      # AWS / MinIO
+      AWS_REGION:            us-east-1
+      AWS_ACCESS_KEY_ID:     minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      S3_ENDPOINT:           http://minio:9000
+
+      # S3 bucket names (must match env.ts schema)
+      S3_MEDIA_BUCKET:    velvet-media-public
+      S3_PRIVATE_BUCKET:  velvet-media-private
+
+      # CloudFront — in dev, MinIO serves as CDN (no real signing needed)
+      CLOUDFRONT_DOMAIN:      localhost:9000
+      CLOUDFRONT_KEY_PAIR_ID: dev-placeholder
+      CLOUDFRONT_PRIVATE_KEY:  dev-placeholder
+
+      # Observability
+      LOG_LEVEL: debug
+      SENTRY_ENVIRONMENT: development
+
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-setup:
+        condition: service_completed_successfully
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

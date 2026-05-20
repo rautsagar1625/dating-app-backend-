@@ -1,0 +1,89 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: velvet-ingress
+  namespace: velvet
+  annotations:
+    kubernetes.io/ingress.class:                nginx
+    cert-manager.io/cluster-issuer:            letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect:  "true"
+    # Rate limiting — applied at ingress level
+    nginx.ingress.kubernetes.io/limit-rps:     "100"
+    nginx.ingress.kubernetes.io/limit-connections: "50"
+    # Large upload support for media routes (overridden per-path below)
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    # CORS handled by app layer
+    nginx.ingress.kubernetes.io/enable-cors:   "false"
+    # WebSocket support
+    nginx.ingress.kubernetes.io/proxy-http-version:           "1.1"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "X-Content-Type-Options: nosniff";
+spec:
+  tls:
+    - hosts:
+        - api.velvet.app
+      secretName: velvet-tls-cert
+  rules:
+    - host: api.velvet.app
+      http:
+        paths:
+          # Socket.IO — sticky session service
+          - path:     /socket.io
+            pathType: Prefix
+            backend:
+              service:
+                name: velvet-api-socketio
+                port:
+                  number: 80
+
+          # Media upload — larger body limit
+          - path:     /api/v1/media
+            pathType: Prefix
+            backend:
+              service:
+                name: velvet-api
+                port:
+                  number: 80
+
+          # All other API routes
+          - path:     /
+            pathType: Prefix
+            backend:
+              service:
+                name: velvet-api
+                port:
+                  number: 80
+---
+# Separate ingress for media uploads with 50m body limit
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: velvet-ingress-media
+  namespace: velvet
+  annotations:
+    kubernetes.io/ingress.class:              nginx
+    cert-manager.io/cluster-issuer:          letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "52m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+spec:
+  tls:
+    - hosts:
+        - api.velvet.app
+      secretName: velvet-tls-cert
+  rules:
+    - host: api.velvet.app
+      http:
+        paths:
+          - path:     /api/v1/media/upload
+            pathType: Prefix
+            backend:
+              service:
+                name: velvet-api
+                port:
+                  number: 80

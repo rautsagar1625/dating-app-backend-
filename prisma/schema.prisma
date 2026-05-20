@@ -1,0 +1,1325 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String    @id @default(uuid())
+  email     String?   @unique
+  phone     String?   @unique
+  password  String
+  role      String    @default("user") // user | admin
+  isBanned  Boolean   @default(false)
+  lastSeen  DateTime?
+  createdAt DateTime  @default(now())
+
+  profile             Profile?
+  photos              Photo[]
+  likesSent           Like[]               @relation("LikesSent")
+  likesReceived       Like[]               @relation("LikesReceived")
+  chatsUser1          Chat[]               @relation("ChatUser1")
+  chatsUser2          Chat[]               @relation("ChatUser2")
+  messages            Message[]
+  wallet              Wallet?
+  transactions        Transaction[]
+  reportsSent         Report[]             @relation("ReportsSent")
+  reportsRecv         Report[]             @relation("ReportsReceived")
+  notifications       Notification[]
+  photoAccessRequests PhotoAccessRequest[] @relation("PhotoAccessRequester")
+  photoAccessGranted  PhotoAccessRequest[] @relation("PhotoAccessOwner")
+  visitsMade          ProfileVisit[]       @relation("VisitsMade")
+  visitsReceived      ProfileVisit[]       @relation("VisitsReceived")
+  favoritesMade       Favorite[]           @relation("FavoritesMade")
+  favoritesReceived   Favorite[]           @relation("FavoritesReceived")
+  blocksMade          Block[]              @relation("BlocksMade")
+  blocksReceived      Block[]              @relation("BlocksReceived")
+  pushTokens          PushToken[]
+  // Media pipeline
+  mediaAssets         MediaAsset[]
+  uploadSessions      UploadSession[]
+  // Monetization
+  subscriptions       Subscription[]
+  entitlements        SubscriptionEntitlement[]
+  paymentSessions     PaymentSession[]
+  purchaseReceipts    PurchaseReceipt[]
+  boostCampaigns      BoostCampaign[]
+  offerExposures      OfferExposure[]
+  spenderSegment      SpenderSegment?
+}
+
+model Profile {
+  id             String  @id @default(uuid())
+  userId         String  @unique
+  username       String  @unique
+  age            Int?
+  gender         String?
+  location       String?
+  bio            String?
+  isPrivatePhoto    Boolean @default(false)
+  isAnonymous       Boolean @default(false)
+  isHidden          Boolean @default(false)
+  allowMessagesFrom String  @default("all") // all | liked | none
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Photo {
+  id        String   @id @default(uuid())
+  userId    String
+  url       String
+  isPrivate Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model PhotoAccessRequest {
+  id          String   @id @default(uuid())
+  requesterId String
+  ownerId     String
+  status      String   @default("PENDING") // PENDING | GRANTED | DENIED
+  createdAt   DateTime @default(now())
+
+  requester User @relation("PhotoAccessRequester", fields: [requesterId], references: [id])
+  owner     User @relation("PhotoAccessOwner", fields: [ownerId], references: [id])
+
+  @@unique([requesterId, ownerId])
+}
+
+model Like {
+  id         String   @id @default(uuid())
+  senderId   String
+  receiverId String
+  createdAt  DateTime @default(now())
+
+  sender   User @relation("LikesSent", fields: [senderId], references: [id])
+  receiver User @relation("LikesReceived", fields: [receiverId], references: [id])
+
+  @@unique([senderId, receiverId])
+}
+
+model Chat {
+  id         String   @id @default(uuid())
+  user1Id    String
+  user2Id    String
+  isUnlocked Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  user1    User      @relation("ChatUser1", fields: [user1Id], references: [id])
+  user2    User      @relation("ChatUser2", fields: [user2Id], references: [id])
+  messages Message[]
+  riskProfile ConversationRiskProfile?
+
+  @@unique([user1Id, user2Id])
+}
+
+model Message {
+  id           String    @id @default(uuid())
+  clientTempId String?   @unique          // idempotency key sent by client
+  chatId       String
+  senderId     String
+  message      String    @db.VarChar(1000)
+  type         String    @default("TEXT") // TEXT | VOICE
+  voiceNoteId  String?                    // set when type=VOICE
+  status       String    @default("SENT") // SENT | DELIVERED | SEEN
+  deliveredAt  DateTime?
+  seenAt       DateTime?
+  createdAt    DateTime  @default(now())
+
+  chat   Chat @relation(fields: [chatId], references: [id])
+  sender User @relation(fields: [senderId], references: [id])
+
+  @@index([chatId, createdAt(sort: Desc)])
+  @@index([chatId, status])
+  @@index([type, chatId])
+}
+
+model Wallet {
+  id      String @id @default(uuid())
+  userId  String @unique
+  balance Int    @default(0)
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Transaction {
+  id        String   @id @default(uuid())
+  userId    String
+  amount    Int
+  type      String   // CREDIT | DEBIT
+  reason    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+model ProfileVisit {
+  id        String   @id @default(uuid())
+  visitorId String
+  visitedId String
+  visitedAt DateTime @default(now())
+
+  visitor User @relation("VisitsMade", fields: [visitorId], references: [id])
+  visited User @relation("VisitsReceived", fields: [visitedId], references: [id])
+
+  @@unique([visitorId, visitedId])
+  @@index([visitedId, visitedAt(sort: Desc)])
+}
+
+model Notification {
+  id          String   @id @default(uuid())
+  userId      String
+  type        String   // LIKE | MESSAGE | VISIT
+  referenceId String   // actorId for all types
+  isRead      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, type, referenceId])
+  // Speeds up "fetch all notifications for user" and unread counts
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+model Favorite {
+  id        String   @id @default(uuid())
+  userId    String
+  targetId  String
+  createdAt DateTime @default(now())
+
+  user   User @relation("FavoritesMade",     fields: [userId],   references: [id])
+  target User @relation("FavoritesReceived", fields: [targetId], references: [id])
+
+  @@unique([userId, targetId])
+}
+
+model Block {
+  id        String   @id @default(uuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+
+  blocker User @relation("BlocksMade",     fields: [blockerId], references: [id])
+  blocked User @relation("BlocksReceived", fields: [blockedId], references: [id])
+
+  @@unique([blockerId, blockedId])
+}
+
+model Report {
+  id         String   @id @default(uuid())
+  reporterId String
+  reportedId String
+  reason     String
+  isResolved Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  reporter User @relation("ReportsSent", fields: [reporterId], references: [id])
+  reported User @relation("ReportsReceived", fields: [reportedId], references: [id])
+}
+
+// Feed impression log: tracks which profiles a user has been shown in the browse feed.
+// Used for anti-repetition — profiles seen in the last 24h are excluded from subsequent pages.
+model FeedImpression {
+  id        String   @id @default(uuid())
+  viewerId  String
+  profileId String
+  seenAt    DateTime @default(now())
+
+  @@unique([viewerId, profileId])
+  @@index([viewerId, seenAt(sort: Desc)])
+}
+
+// Per-user risk scoring for abuse detection. Lazily created on first risk event.
+// riskScore thresholds: 0-24 = clean, 25-49 = watch, 50-74 = restrict, 75+ = soft ban
+model UserRiskProfile {
+  id            String    @id @default(uuid())
+  userId        String    @unique
+  riskScore     Int       @default(0)
+  reportCount   Int       @default(0)
+  blockCount    Int       @default(0)
+  spamFlags     Int       @default(0)
+  isSoftBanned  Boolean   @default(false)
+  softBanReason String?
+  softBannedAt  DateTime?
+  updatedAt     DateTime  @updatedAt
+
+  @@index([riskScore(sort: Desc)])
+}
+
+// Append-only event log for product analytics (funnels, retention, engagement).
+// Never updated — only inserted and queried.
+model AnalyticsEvent {
+  id         String   @id @default(uuid())
+  userId     String?                    // null for anonymous events
+  event      String                     // 'profile_view' | 'like_sent' | 'chat_unlocked' | ...
+  properties Json     @default("{}")
+  occurredAt DateTime @default(now())
+
+  @@index([userId, occurredAt(sort: Desc)])
+  @@index([event, occurredAt(sort: Desc)])
+}
+
+// Stores Expo push tokens per device per user.
+// One user can have multiple devices, each with its own token.
+model PushToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique  // Expo push token
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+// ── Device Fingerprinting + Fraud Detection ───────────────────────────────────
+
+// One record per unique device. deviceIdHash = SHA-256(clientDeviceId + salt).
+// Raw device IDs are never stored — only the hash (GDPR-conscious design).
+model DeviceFingerprint {
+  id             String   @id @default(uuid())
+  deviceIdHash   String   @unique            // SHA-256(deviceId + DEVICE_ID_SALT)
+  brand          String?
+  model          String?
+  osName         String?
+  osVersion      String?
+  isEmulator     Boolean  @default(false)
+  isRooted       Boolean  @default(false)
+  riskScore      Int      @default(0)
+  riskLevel      String   @default("CLEAN")  // CLEAN|LOW|MEDIUM|HIGH|CRITICAL|EXTREME
+  linkedUserIds  String[] @default([])        // all accounts seen on this device
+  recentIpHashes String[] @default([])        // last 5 IP hashes (privacy-safe correlation)
+  seenCount      Int      @default(1)
+  firstSeenAt    DateTime @default(now())
+  lastSeenAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  signals     FraudSignal[]
+  cases       FraudCase[]
+  enforcements FraudEnforcementAction[]
+
+  @@index([riskLevel])
+  @@index([lastSeenAt(sort: Desc)])
+  @@index([riskScore(sort: Desc)])
+}
+
+// Append-only log of individual fraud signals. Each signal contributes to risk score.
+model FraudSignal {
+  id           String   @id @default(uuid())
+  deviceFpId   String?
+  userId       String?
+  signalType   String   // see FraudSignalType enum in fraud.types.ts
+  severity     String   // LOW | MEDIUM | HIGH | CRITICAL
+  score        Int      // points contributed to risk score
+  metadata     Json     @default("{}")
+  resolvedAt   DateTime?
+  createdAt    DateTime @default(now())
+
+  deviceFp DeviceFingerprint? @relation(fields: [deviceFpId], references: [id])
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([deviceFpId, createdAt(sort: Desc)])
+  @@index([signalType, createdAt(sort: Desc)])
+}
+
+// Manual review queue. Created when risk score crosses the HIGH threshold.
+model FraudCase {
+  id           String    @id @default(uuid())
+  userId       String
+  deviceFpId   String?
+  status       String    @default("PENDING")  // PENDING | IN_REVIEW | RESOLVED | DISMISSED
+  priority     String    @default("NORMAL")   // LOW | NORMAL | HIGH | CRITICAL
+  riskScore    Int
+  signals      Json      @default("[]")       // snapshot at case creation
+  reviewerId   String?
+  reviewNotes  String?
+  actionTaken  String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  resolvedAt   DateTime?
+
+  deviceFp DeviceFingerprint? @relation(fields: [deviceFpId], references: [id])
+
+  @@index([status, priority, createdAt(sort: Desc)])
+  @@index([userId])
+}
+
+// Active enforcement actions per user and/or device.
+// expiresAt = null means permanent. actorId = null means automated.
+model FraudEnforcementAction {
+  id           String    @id @default(uuid())
+  userId       String?
+  deviceFpId   String?
+  actionType   String    // WARN | COOLDOWN | SHADOW_RESTRICT | SOFT_BAN | HARD_BAN
+  reason       String
+  expiresAt    DateTime?
+  isActive     Boolean   @default(true)
+  actorId      String?
+  metadata     Json      @default("{}")
+  createdAt    DateTime  @default(now())
+  revokedAt    DateTime?
+  revokedBy    String?
+
+  deviceFp DeviceFingerprint? @relation(fields: [deviceFpId], references: [id])
+
+  @@index([userId, isActive])
+  @@index([deviceFpId, isActive])
+  @@index([actionType, isActive])
+  @@index([expiresAt])
+}
+
+// ── Feature Flag System ───────────────────────────────────────────────────────
+
+// Master flag definition. Evaluation order: enabled → expiry → platform →
+// region → blockedUserIds → targetUserIds → per-user override → rollout %.
+model FeatureFlag {
+  id                String    @id @default(uuid())
+  key               String    @unique            // e.g. "enableVideoCalls"
+  description       String    @default("")
+  enabled           Boolean   @default(false)    // master kill switch
+  rolloutPercentage Int       @default(0)        // 0-100
+  targetUserIds     String[]  @default([])       // always ON for these users
+  blockedUserIds    String[]  @default([])       // always OFF for these users
+  platforms         String[]  @default([])       // [] = all; ["ios","android","web"]
+  regions           String[]  @default([])       // [] = all; ["in","us","gb"]
+  metadata          Json      @default("{}")     // arbitrary config payload
+  expiresAt         DateTime?                    // auto-disable after this date
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  overrides FeatureFlagOverride[]
+  auditLogs FeatureFlagAuditLog[]
+
+  @@index([key])
+}
+
+// Per-user explicit overrides — takes precedence over rollout percentage.
+model FeatureFlagOverride {
+  id        String   @id @default(uuid())
+  flagId    String
+  userId    String
+  enabled   Boolean
+  reason    String   @default("")
+  createdAt DateTime @default(now())
+
+  flag FeatureFlag @relation(fields: [flagId], references: [id], onDelete: Cascade)
+
+  @@unique([flagId, userId])
+  @@index([userId])
+}
+
+// Immutable append-only audit trail for every flag mutation.
+model FeatureFlagAuditLog {
+  id        String   @id @default(uuid())
+  flagId    String
+  actorId   String?
+  action    String   // CREATED | UPDATED | DELETED | OVERRIDE_SET | OVERRIDE_REMOVED
+  before    Json?
+  after     Json?
+  createdAt DateTime @default(now())
+
+  flag FeatureFlag @relation(fields: [flagId], references: [id], onDelete: Cascade)
+
+  @@index([flagId, createdAt(sort: Desc)])
+}
+
+// ── Media Pipeline ────────────────────────────────────────────────────────────
+//
+// Architecture:
+//   1. Client requests presigned S3 PUT URL → UploadSession created (PENDING)
+//   2. Client PUT to S3 temp bucket directly (zero backend bandwidth)
+//   3. Client calls /complete → session marked COMPLETED, BullMQ job enqueued
+//   4. Worker: download from temp, generate variants, upload to final bucket
+//   5. Worker: compute blurhash + perceptual hash, update MediaAsset (READY)
+//   6. Worker: enqueue moderation scan
+//   7. CDN signed URLs generated on-demand, cached in Redis
+//
+// Bucket layout:
+//   velvet-media-temp      — raw uploads land here (lifecycle: 24h auto-delete)
+//   velvet-media-public    — processed profile photos (CloudFront public dist)
+//   velvet-media-private   — private photos, verification (CloudFront signed URL)
+//   velvet-media-chat      — chat attachments (CloudFront signed URL, 24h TTL)
+//   velvet-media-quarantine — content flagged by moderation (no CDN access)
+
+// Master record for every media object in the system.
+model MediaAsset {
+  id              String @id @default(uuid())
+  userId          String
+  user            User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // PROFILE_PHOTO | PRIVATE_PHOTO | CHAT_ATTACHMENT | VERIFICATION_SELFIE | VIDEO
+  mediaType       String
+  // PENDING | UPLOADED | PROCESSING | READY | FAILED | DELETED | QUARANTINED
+  status          String @default("PENDING")
+  // UNREVIEWED | PENDING | APPROVED | REJECTED | QUARANTINED
+  moderationState String @default("UNREVIEWED")
+
+  // Storage — tempS3Key holds the raw upload until processing moves it
+  s3Bucket    String
+  s3Key       String
+  tempS3Key   String?
+
+  // CDN
+  cdnDomain   String?  // e.g. cdn-public.velvet.app
+
+  // File metadata (populated after processing)
+  mimeType      String
+  fileSizeBytes Int      @default(0)
+  width         Int?
+  height        Int?
+  durationSecs  Float?   // future: video
+
+  // Fingerprints
+  perceptualHash String?  // 16-hex aHash — duplicate detection
+  sha256Hash     String?  // integrity
+  blurhash       String?  // 4×3 component, for progressive loading
+
+  variants       MediaVariant[]
+  uploadSession  UploadSession?
+  moderations    MediaModeration[]
+  accessLogs     MediaAccessLog[]
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+
+  @@index([userId, mediaType, status])
+  @@index([perceptualHash])
+  @@index([status, moderationState])
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+// One record per processed size/format combination.
+// variantType: ORIGINAL | LARGE | MEDIUM | SMALL | THUMB
+// format:      WEBP | AVIF | JPEG
+model MediaVariant {
+  id            String     @id @default(uuid())
+  assetId       String
+  asset         MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  variantType   String  // ORIGINAL | LARGE | MEDIUM | SMALL | THUMB
+  format        String  // WEBP | AVIF | JPEG
+
+  s3Key         String
+  fileSizeBytes Int
+  width         Int
+  height        Int
+
+  createdAt DateTime @default(now())
+
+  @@unique([assetId, variantType, format])
+  @@index([assetId])
+}
+
+// One record per upload attempt. Expired sessions are cleaned up by a cron job.
+model UploadSession {
+  id         String  @id @default(uuid())
+  userId     String
+  user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assetId    String? @unique
+  asset      MediaAsset? @relation(fields: [assetId], references: [id])
+
+  uploadType   String  // MediaType value
+  // PENDING | COMPLETED | EXPIRED | FAILED
+  status       String  @default("PENDING")
+
+  s3Bucket     String
+  s3Key        String
+  presignedUrl String  @db.Text
+
+  maxSizeBytes Int
+  allowedMimes String[]
+
+  expiresAt   DateTime
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, status])
+  @@index([expiresAt])
+}
+
+// Immutable moderation result record. Multiple records per asset are allowed
+// (re-scans, different providers, manual override).
+model MediaModeration {
+  id      String     @id @default(uuid())
+  assetId String
+  asset   MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  // 'aws-rekognition' | 'google-vision' | 'sightengine' | 'phash' | 'manual'
+  provider    String
+  result      Json    // raw provider response
+
+  isNsfw      Boolean?
+  nsfwScore   Float?
+  labels      String[]
+
+  reviewerId  String?
+  reviewNotes String?
+  reviewedAt  DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([assetId])
+  @@index([isNsfw, createdAt(sort: Desc)])
+}
+
+// ── AI Moderation + Trust & Safety ───────────────────────────────────────────
+//
+// Pipeline:
+//   MessageCreated → realtime rules (<10ms) → async ML → ConversationRiskProfile
+//   MediaUploaded  → NSFW scan → phash dedup → quarantine flow
+//   Both paths     → ModerationEvent → ModerationDecision → enforcement
+//
+// Trust Score (0-100):
+//   Computed from fraud signals, moderation history, report velocity,
+//   spam behavior, block rate, profile completeness, verification, account age.
+//   Cached in Redis, snapshotted in TrustScoreHistory on every change.
+
+// Trigger-level immutable record for every moderation action.
+model ModerationEvent {
+  id           String   @id @default(uuid())
+  sourceType   String   // MESSAGE | MEDIA | PROFILE | CONVERSATION
+  sourceId     String   // messageId, mediaAssetId, chatId, etc.
+  userId       String   // account being moderated
+
+  triggerType  String   // REALTIME_RULES | ASYNC_ML | REPORT | PHASH | MANUAL
+  triggerReason String  // ESCORT_PATTERN | SPAM_REPETITION | NSFW_HIGH | HARASSMENT | etc.
+
+  riskScore    Int      @default(0)   // 0-100 at time of event
+  decision     String   @default("PENDING") // PENDING | APPROVED | REJECTED | ESCALATED | SUPPRESSED
+
+  moderatorId  String?  // null = automated system
+  resolvedAt   DateTime?
+
+  decisions    ModerationDecision[]
+  appeals      ModerationAppeal[]
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([sourceType, sourceId])
+  @@index([decision, createdAt(sort: Desc)])
+  @@index([triggerType, createdAt(sort: Desc)])
+}
+
+// Each decision record: outcome + explainability + enforcement taken.
+// Multiple decisions per event are allowed (e.g. automated then manual override).
+model ModerationDecision {
+  id           String          @id @default(uuid())
+  eventId      String
+  event        ModerationEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  decision     String   // APPROVED | REJECTED | ESCALATED | SUPPRESSED | WARNING_SENT
+  confidence   Float?   // 0.0–1.0 from ML provider; null for rule-based
+  provider     String   // rules | openai | rekognition | hive | sightengine | manual
+
+  explanation  String   // human-readable reason shown in moderation UI
+  signals      Json     @default("[]")  // [{type, score, detail}] — explainability array
+
+  enforcementType String? // WARN | COOLDOWN | SHADOW_RESTRICT | SOFT_BAN | HARD_BAN
+  enforcementId   String? // links to FraudEnforcementAction.id
+
+  moderatorId  String?
+  createdAt    DateTime @default(now())
+
+  @@index([eventId])
+  @@index([decision, createdAt(sort: Desc)])
+  @@index([provider, createdAt(sort: Desc)])
+}
+
+// Per-message moderation outcome — never stores raw message content.
+model MessageModerationResult {
+  id        String   @id @default(uuid())
+  messageId String   @unique
+  chatId    String
+  userId    String   // sender
+
+  riskScore Int      @default(0)
+  decision  String   @default("CLEAN") // CLEAN | WARNED | SUPPRESSED | ESCALATED
+
+  // Signal categories only — no raw text stored (GDPR)
+  signals           Json    @default("[]")  // [{type, score}]
+  contactsFound     Boolean @default(false) // phone/email/URL detected
+  langCode          String? // detected language (ISO 639-1)
+
+  provider          String  @default("rules") // rules | openai | ...
+  processedAt       DateTime @default(now())
+
+  @@index([userId, processedAt(sort: Desc)])
+  @@index([chatId, processedAt(sort: Desc)])
+  @@index([riskScore(sort: Desc)])
+  @@index([decision, processedAt(sort: Desc)])
+}
+
+// Rolling risk profile per conversation — updated on every message moderation.
+model ConversationRiskProfile {
+  id       String @id @default(uuid())
+  chatId   String @unique
+  chat     Chat   @relation(fields: [chatId], references: [id])
+
+  riskScore Int    @default(0)
+  riskLevel String @default("CLEAN") // CLEAN | LOW | MEDIUM | HIGH | CRITICAL
+
+  toxicMessages   Int @default(0)
+  spamMessages    Int @default(0)
+  escortSignals   Int @default(0)
+  scamSignals     Int @default(0)
+  contactExtracts Int @default(0)
+  harassSignals   Int @default(0)
+
+  initiatorRisk   Int @default(0) // trust score of user who initiated chat
+  recipientRisk   Int @default(0)
+
+  lastSignalAt    DateTime?
+  escalatedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([riskScore(sort: Desc)])
+  @@index([riskLevel])
+  @@index([lastSignalAt(sort: Desc)])
+}
+
+// Append-only audit trail of trust score snapshots.
+model TrustScoreHistory {
+  id         String   @id @default(uuid())
+  userId     String
+  score      Int      // 0-100
+  delta      Int      // change from previous (+/-)
+  reason     String   // e.g. "moderation_violation:ESCORT_PATTERN"
+  components Json     @default("{}") // {fraudRisk, modViolations, reportRate, ...}
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([score(sort: Asc)])
+}
+
+// Appeal workflow for moderation decisions.
+model ModerationAppeal {
+  id      String          @id @default(uuid())
+  eventId String
+  event   ModerationEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId  String
+
+  status      String  @default("PENDING") // PENDING | APPROVED | DENIED
+  reason      String  @db.VarChar(500)
+  reviewerId  String?
+  reviewNotes String?
+  reviewedAt  DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+}
+
+// ── Admin Intelligence Platform ───────────────────────────────────────────────
+
+// Immutable append-only log of every admin action — the compliance audit trail.
+model AdminAuditLog {
+  id         String   @id @default(uuid())
+  adminId    String
+  action     String   // BAN_USER | RESOLVE_REPORT | ENFORCE | REVOKE | FLAG_UPDATE | etc.
+  targetType String?  // USER | REPORT | DEVICE | FLAG | JOB | MEDIA
+  targetId   String?
+  metadata   Json     @default("{}")
+  ipHash     String?
+  requestId  String?
+  createdAt  DateTime @default(now())
+
+  @@index([adminId, createdAt(sort: Desc)])
+  @@index([targetType, targetId])
+  @@index([action, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+}
+
+// Pre-aggregated snapshots for fast O(1) dashboard queries.
+// Computed by the analytics aggregator cron — never written in request path.
+model DashboardMetricSnapshot {
+  id          String   @id @default(uuid())
+  metric      String   // DAU | WAU | MAU | NEW_USERS | MESSAGES | MATCHES | REVENUE | CHATS_UNLOCKED
+  granularity String   // HOURLY | DAILY | WEEKLY | MONTHLY
+  periodStart DateTime // Truncated to the granularity boundary (e.g. start of day)
+  value       Float
+  metadata    Json     @default("{}")  // extra breakdown data (e.g. by platform)
+  computedAt  DateTime @default(now())
+
+  @@unique([metric, granularity, periodStart])
+  @@index([metric, granularity, periodStart(sort: Desc)])
+}
+
+// Daily retention and funnel aggregations for cohort analysis.
+// Each row covers one (aggType, periodDate, cohortDate) combination.
+model AnalyticsAggregation {
+  id         String    @id @default(uuid())
+  aggType    String    // RETENTION_D1 | RETENTION_D7 | RETENTION_D30 | REVENUE_DAILY | FUNNEL_SIGNUP
+  periodDate DateTime  // The calendar date this row represents
+  cohortDate DateTime? // For retention: the registration date of the cohort
+  value      Float     // rate (0-1) for retention, absolute count/amount for others
+  sampleSize Int       @default(0)
+  metadata   Json      @default("{}")
+  computedAt DateTime  @default(now())
+
+  @@unique([aggType, periodDate, cohortDate])
+  @@index([aggType, periodDate(sort: Desc)])
+}
+
+// Append-only audit trail: every time a signed CDN URL is issued for a private asset.
+model MediaAccessLog {
+  id      String     @id @default(uuid())
+  assetId String
+  asset   MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  userId  String
+
+  // 'view' | 'presigned_url_issued' | 'download'
+  accessType String
+  ipHash     String
+  userAgent  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([assetId, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RECOMMENDATION + MATCHING INTELLIGENCE ENGINE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Aggregated behavioral signal profile per user.
+// Updated by the rec-signal-agg worker (every 6h) and incrementally on feedback.
+// Never written on hot path — signals are read-only for the ranking engine.
+model UserSignalProfile {
+  id     String @id @default(uuid())
+  userId String @unique
+
+  // Engagement ratios (14-day rolling window)
+  likeOutRate    Float @default(0)  // likes_sent / profiles_seen
+  likeInRate     Float @default(0)  // likes_received / distinct_visitors
+  replyRate      Float @default(0)  // chats_replied / chats_received (first msg)
+  avgConvDepth   Float @default(0)  // avg messages per started conversation
+  convStartRate  Float @default(0)  // matches_where_convo_starts / total_matches
+
+  // Activity
+  sessionCount    Int @default(0)
+  avgSessionLenS  Int @default(0)   // seconds
+
+  // Negative signals (7-day)
+  blockRecvRate  Float @default(0)  // blocks_received / 100_visitors
+  reportRecvRate Float @default(0)
+
+  // Quality
+  profileQuality Float @default(0)  // 0-1 completeness score
+  photoCount     Int   @default(0)
+
+  // Trust (mirrors trust.score snapshot)
+  trustScore Float @default(50)
+  fraudScore Float @default(0)
+
+  computedAt DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([updatedAt(sort: Desc)])
+}
+
+// Precomputed candidate pool for a user — refreshed every 30 minutes.
+// Scores here are pre-ranking (fast filter pass), not final rank scores.
+model RecommendationCandidate {
+  id          String   @id @default(uuid())
+  userId      String   // the feed owner
+  candidateId String   // the candidate profile
+  poolType    String   // PROXIMITY | BEHAVIORAL | MUTUAL_INTEREST | POPULAR | FRESH | BOOST
+  preScore    Float    @default(0)
+  generatedAt DateTime @default(now())
+  expiresAt   DateTime
+
+  @@unique([userId, candidateId])
+  @@index([userId, expiresAt(sort: Desc)])
+  @@index([userId, preScore(sort: Desc)])
+}
+
+// One row per feed session (open → scroll → close).
+// Used for fatigue analysis, session-level diversity, and A/B attribution.
+model FeedSession {
+  id          String    @id @default(uuid())
+  userId      String
+  startedAt   DateTime  @default(now())
+  endedAt     DateTime?
+  seenCount   Int       @default(0)
+  likeCount   Int       @default(0)
+  skipCount   Int       @default(0)
+  matchCount  Int       @default(0)
+  rankVersion String    @default("v1")
+  experimentId String?
+
+  @@index([userId, startedAt(sort: Desc)])
+  @@index([experimentId, startedAt(sort: Desc)])
+}
+
+// Every explicit or implicit action taken on a recommendation card.
+// Powers the feedback loop, CTR computation, and retention correlation.
+model RecommendationFeedback {
+  id          String   @id @default(uuid())
+  userId      String   // the viewer
+  targetId    String   // the shown profile
+  sessionId   String?
+  action      String   // LIKE | SKIP | SUPERLIKE | BLOCK | REPORT | VIEW | DWELL | MATCH
+  dwellMs     Int?     // milliseconds spent on card
+  position    Int?     // 0-indexed position in feed
+  rankScore   Float?   // score at time of showing
+  rankVersion String?
+  signals     Json?    // snapshot of factors at ranking time
+  occurredAt  DateTime @default(now())
+
+  @@index([userId, occurredAt(sort: Desc)])
+  @@index([targetId, occurredAt(sort: Desc)])
+  @@index([action, occurredAt(sort: Desc)])
+  @@index([sessionId])
+}
+
+// Future-ready: persists user behavior embeddings for vector similarity.
+// Currently unused at inference time — populated by offline ML pipeline.
+model UserEmbedding {
+  id         String   @id @default(uuid())
+  userId     String   @unique
+  version    String   @default("v0")
+  vector     Json     // Float32 array as number[]  — migrate to pgvector later
+  dimensions Int      @default(64)
+  modelName  String   @default("behavioral_v0")
+  computedAt DateTime @default(now())
+
+  @@index([version, computedAt(sort: Desc)])
+}
+
+// A/B ranking experiments. Variants define weight overrides per treatment arm.
+model RankingExperiment {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  description String?
+  status      String    @default("DRAFT")  // DRAFT | ACTIVE | PAUSED | COMPLETED
+  variants    Json      // { control: RankingWeights, treatment: RankingWeights }
+  trafficPct  Float     @default(0.1)      // fraction of users in experiment (0-1)
+  startedAt   DateTime?
+  endedAt     DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([status, startedAt(sort: Desc)])
+}
+
+// Point-in-time snapshot of a user's ranked feed for auditability and debugging.
+// Written by the ranking engine when rankVersion changes or on-demand debug.
+model RecommendationSnapshot {
+  id          String   @id @default(uuid())
+  userId      String
+  snapshotAt  DateTime @default(now())
+  rankVersion String
+  topN        Json     // [{ candidateId, score, factors }]
+  weights     Json     // RankingWeights used
+
+  @@index([userId, snapshotAt(sort: Desc)])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// REALTIME COMMUNICATION LAYER — VOICE NOTES + CALLS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Processed voice note attached to a chat message.
+// Client provides duration + waveform (computed locally for instant UX).
+// Worker validates via ffprobe and runs content moderation.
+model VoiceMessage {
+  id            String    @id @default(uuid())
+  messageId     String    @unique        // FK to Message (type=VOICE)
+  chatId        String
+  senderId      String
+  s3Key         String                   // processed/normalized file in CDN chat bucket
+  mimeType      String    @default("audio/aac")
+  fileSizeBytes Int
+  durationMs    Int                      // audio duration in milliseconds
+  waveform      Json                     // Float[] ~100 amplitude values 0-1
+  transcription String?                  // future: AI speech-to-text
+  processedAt   DateTime?               // null until worker confirms
+  moderatedAt   DateTime?
+  deletedAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([chatId, createdAt(sort: Desc)])
+  @@index([senderId, createdAt(sort: Desc)])
+}
+
+// Lifecycle of a single audio or video call between two users.
+// Soft-delete pattern: status drives display, not deletion.
+model CallSession {
+  id             String    @id @default(uuid())
+  callerId       String
+  calleeId       String
+  chatId         String?                  // optional: linked to existing unlocked chat
+  type           String    @default("AUDIO") // AUDIO | VIDEO
+  status         String    @default("RINGING")
+  // RINGING → CONNECTING | REJECTED | MISSED | CANCELLED
+  // CONNECTING → ACTIVE | FAILED
+  // ACTIVE → ENDED | FAILED
+  // Any → MODERATION_ENDED
+
+  provider       String    @default("stub") // agora | livekit | twilio | stub
+  providerRoomId String?                  // provider-assigned room ID
+  callerToken    String?                  // provider token for caller (short TTL — not persisted long)
+  calleeToken    String?                  // provider token for callee
+
+  startedAt      DateTime?               // when status → ACTIVE
+  endedAt        DateTime?
+  durationS      Int?                     // active call seconds
+  endReason      String?                  // NORMAL | MISSED | REJECTED | CANCELLED | FAILED | MODERATION | TIMEOUT
+  callerIpHash   String?                  // hashed for moderation audit
+  calleeIpHash   String?
+  createdAt      DateTime  @default(now())
+
+  participants     CallParticipant[]
+  qualityEvents    CallQualityEvent[]
+  moderationEvents CallModerationEvent[]
+
+  @@index([callerId, createdAt(sort: Desc)])
+  @@index([calleeId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([chatId, createdAt(sort: Desc)])
+}
+
+// Per-participant metadata within a call (supports future group calls).
+model CallParticipant {
+  id         String    @id @default(uuid())
+  callId     String
+  userId     String
+  role       String                       // CALLER | CALLEE
+  joinedAt   DateTime?
+  leftAt     DateTime?
+  deviceType String?                      // ios | android | web
+  appVersion String?
+
+  call CallSession @relation(fields: [callId], references: [id])
+
+  @@unique([callId, userId])
+  @@index([userId, joinedAt(sort: Desc)])
+}
+
+// Client-reported QoS metrics sampled every 5 seconds during an active call.
+// Powers Prometheus dashboards and provider health monitoring.
+model CallQualityEvent {
+  id            String   @id @default(uuid())
+  callId        String
+  userId        String
+  packetLossPct Float?                    // 0-100
+  jitterMs      Float?
+  rttMs         Float?                    // round-trip time in ms
+  bitrateKbps   Float?
+  resolution    String?                   // "640x480" for video
+  frameRate     Int?                      // fps
+  networkType   String?                   // wifi | cellular | ethernet | unknown
+  reportedAt    DateTime @default(now())
+
+  call CallSession @relation(fields: [callId], references: [id])
+
+  @@index([callId, reportedAt(sort: Desc)])
+  @@index([userId, reportedAt(sort: Desc)])
+}
+
+// User-submitted abuse report tied to a specific call.
+// Feeds into the existing ModerationEvent pipeline.
+model CallModerationEvent {
+  id          String    @id @default(uuid())
+  callId      String
+  reporterId  String
+  reportedId  String
+  reason      String                      // SPAM | HARASSMENT | SCAM | INAPPROPRIATE | UNDERAGE
+  status      String    @default("PENDING") // PENDING | REVIEWED | DISMISSED | ESCALATED
+  notes       String?   @db.VarChar(500)
+  reviewerId  String?
+  reviewedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  call CallSession @relation(fields: [callId], references: [id])
+
+  @@index([callId])
+  @@index([reportedId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MONETIZATION + PAYMENT ECOSYSTEM
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Subscription ─────────────────────────────────────────────────────────────
+// Server-side subscription record. Single source of truth — never trust
+// client-reported subscription state. Validated against provider receipt.
+model Subscription {
+  id                String    @id @default(uuid())
+  userId            String
+  tier              String                        // VELVET_GOLD | VELVET_PLATINUM | VELVET_DIAMOND
+  status            String    @default("ACTIVE")  // ACTIVE | CANCELLED | PAST_DUE | EXPIRED | PAUSED
+  provider          String                        // stripe | razorpay | apple | google
+  providerSubId     String?   @unique             // provider subscription/original_transaction_id
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelAtPeriodEnd  Boolean  @default(false)
+  cancelledAt       DateTime?
+  pausedAt          DateTime?
+  resumeAt          DateTime?
+  gracePeriodEndsAt DateTime?                     // 7-day grace on payment failure
+  trialEndsAt       DateTime?
+  priceUsd          Decimal   @db.Decimal(10, 4)
+  currency          String    @default("USD")
+  billingInterval   String    @default("MONTH")   // MONTH | YEAR
+  autoRenew         Boolean   @default(true)
+  failedRenewals    Int       @default(0)
+  metadata          Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  user         User                    @relation(fields: [userId], references: [id])
+  entitlements SubscriptionEntitlement[]
+  payments     PaymentSession[]
+
+  @@index([userId, status])
+  @@index([status, currentPeriodEnd])
+  @@index([providerSubId])
+}
+
+// ── SubscriptionEntitlement ───────────────────────────────────────────────────
+// Fine-grained feature grants derived from subscription tier.
+// Engine reads from Redis cache; DB is the authoritative record.
+model SubscriptionEntitlement {
+  id             String   @id @default(uuid())
+  userId         String
+  subscriptionId String
+  feature        String                          // UNLIMITED_LIKES | FREE_UNLOCKS | INVISIBLE_BROWSE | etc.
+  grantedAt      DateTime @default(now())
+  expiresAt      DateTime
+
+  user         User         @relation(fields: [userId], references: [id])
+  subscription Subscription @relation(fields: [subscriptionId], references: [id])
+
+  @@unique([userId, feature])
+  @@index([userId, expiresAt])
+  @@index([subscriptionId])
+}
+
+// ── PaymentSession ────────────────────────────────────────────────────────────
+// Idempotent payment intent. One row per purchase attempt.
+// Never delete — immutable audit log of every charge attempt.
+model PaymentSession {
+  id               String    @id @default(uuid())
+  userId           String
+  idempotencyKey   String    @unique              // client-generated, prevents double-charge
+  provider         String                         // stripe | razorpay | apple | google
+  providerIntentId String?   @unique              // stripe PI / razorpay order / apple txId
+  productType      String                         // SUBSCRIPTION | BOOST | SUPERLIKE | UNLOCK | CREDIT_PACK
+  productId        String                         // SKU identifier
+  amountUsd        Decimal   @db.Decimal(10, 4)
+  currency         String    @default("USD")
+  status           String    @default("PENDING")  // PENDING | PROCESSING | SUCCESS | FAILED | REFUNDED | DISPUTED
+  failureCode      String?
+  failureMessage   String?
+  receiptData      String?   @db.Text             // raw receipt / provider response
+  refundedAt       DateTime?
+  refundAmountUsd  Decimal?  @db.Decimal(10, 4)
+  disputedAt       DateTime?
+  subscriptionId   String?
+  metadata         Json?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id])
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id])
+  providerEvents PaymentProviderEvent[]
+
+  @@index([userId, status])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([providerIntentId])
+}
+
+// ── PaymentProviderEvent ──────────────────────────────────────────────────────
+// Immutable log of every webhook / callback received from a payment provider.
+// Used for reconciliation, dispute resolution, and audit.
+model PaymentProviderEvent {
+  id               String   @id @default(uuid())
+  provider         String                          // stripe | razorpay | apple | google
+  eventType        String                          // payment.success | subscription.renewed | etc.
+  providerEventId  String   @unique                // provider's event ID — dedup key
+  paymentSessionId String?
+  userId           String?
+  rawPayload       Json                            // full webhook body, never truncated
+  processedAt      DateTime?
+  failedAt         DateTime?
+  retryCount       Int      @default(0)
+  createdAt        DateTime @default(now())
+
+  paymentSession PaymentSession? @relation(fields: [paymentSessionId], references: [id])
+
+  @@index([provider, eventType])
+  @@index([paymentSessionId])
+  @@index([processedAt])
+}
+
+// ── PurchaseReceipt ───────────────────────────────────────────────────────────
+// Validated mobile store receipts. Keyed on provider transaction ID for dedup.
+// Apple/Google receipts are re-validated server-side — never trust client claims.
+model PurchaseReceipt {
+  id                  String    @id @default(uuid())
+  userId              String
+  platform            String                          // apple | google
+  productId           String                          // App Store / Play Store product SKU
+  transactionId       String    @unique               // provider txId — dedup key
+  originalTransactionId String?                       // Apple: original_transaction_identifier
+  receiptToken        String    @db.Text              // raw Apple receipt / Google purchase token
+  purchaseState       String                          // PURCHASED | PENDING | CANCELLED | REFUNDED
+  expiresAt           DateTime?                       // for subscriptions
+  validatedAt         DateTime  @default(now())
+  validationResponse  Json?                           // raw server validation response
+  subscriptionId      String?   @unique
+  userId2             String?   // denorm for fast lookups
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, platform])
+  @@index([originalTransactionId])
+}
+
+// ── BoostCampaign ─────────────────────────────────────────────────────────────
+// A purchased profile visibility boost. Controls recommendation-engine weights.
+// Fairness: score bonuses are capped via MONETIZATION_CAPS in weights.ts.
+model BoostCampaign {
+  id            String    @id @default(uuid())
+  userId        String
+  type          String                           // BOOST | SPOTLIGHT | SUPERLIKE | PRIORITY_INBOX
+  status        String    @default("QUEUED")     // QUEUED | ACTIVE | EXHAUSTED | EXPIRED | CANCELLED
+  paymentSessionId String?
+  multiplier    Float     @default(1.5)          // ranking score multiplier
+  durationMinutes Int     @default(30)
+  impressionsCap  Int?                           // max impressions before EXHAUSTED
+  impressionsSent Int     @default(0)
+  startedAt     DateTime?
+  expiresAt     DateTime?
+  cancelledAt   DateTime?
+  metadata      Json?
+  createdAt     DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, status])
+  @@index([status, expiresAt])
+}
+
+// ── MonetizationExperiment ────────────────────────────────────────────────────
+// Pricing / paywall / offer A/B experiments. Separate from RankingExperiment
+// to isolate revenue causality analysis.
+model MonetizationExperiment {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  description String?
+  type        String                             // PRICING | PAYWALL | OFFER_TIMING | BOOST_PRICE | SUBSCRIPTION_CTA
+  status      String    @default("DRAFT")        // DRAFT | ACTIVE | PAUSED | STOPPED
+  startedAt   DateTime?
+  stoppedAt   DateTime?
+  trafficPct  Int       @default(100)            // % of eligible users in experiment
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+
+  variants  PricingVariant[]
+  exposures OfferExposure[]
+
+  @@index([status])
+}
+
+// ── PricingVariant ────────────────────────────────────────────────────────────
+// One A/B variant within a MonetizationExperiment.
+model PricingVariant {
+  id           String   @id @default(uuid())
+  experimentId String
+  name         String                           // control | treatment_a | treatment_b
+  config       Json                             // price, copy, CTA, discount %, etc.
+  weight       Int      @default(50)            // traffic split weight (relative)
+  createdAt    DateTime @default(now())
+
+  experiment MonetizationExperiment @relation(fields: [experimentId], references: [id])
+  exposures  OfferExposure[]
+
+  @@unique([experimentId, name])
+  @@index([experimentId])
+}
+
+// ── OfferExposure ─────────────────────────────────────────────────────────────
+// Every time a user is shown a monetization offer / paywall / upsell CTA.
+// Used for conversion funnel analysis and fatigue detection.
+model OfferExposure {
+  id           String    @id @default(uuid())
+  userId       String
+  offerType    String                           // SUBSCRIPTION_UPSELL | BOOST_PROMPT | SUPERLIKE_PROMPT | etc.
+  experimentId String?
+  variantId    String?
+  context      String?                          // FEED | MATCH | CHAT_LOCK | LIKES_WALL | etc.
+  shownAt      DateTime  @default(now())
+  convertedAt  DateTime?
+  dismissedAt  DateTime?
+  revenue      Decimal?  @db.Decimal(10, 4)
+
+  user       User                    @relation(fields: [userId], references: [id])
+  experiment MonetizationExperiment? @relation(fields: [experimentId], references: [id])
+  variant    PricingVariant?         @relation(fields: [variantId], references: [id])
+
+  @@index([userId, offerType])
+  @@index([offerType, shownAt(sort: Desc)])
+  @@index([experimentId, shownAt])
+}
+
+// ── RevenueSnapshot ───────────────────────────────────────────────────────────
+// Pre-aggregated hourly / daily revenue metrics. Feeds dashboards without
+// scanning PaymentSession at query time.
+model RevenueSnapshot {
+  id                String   @id @default(uuid())
+  granularity       String                          // HOUR | DAY | WEEK | MONTH
+  periodStart       DateTime
+  periodEnd         DateTime
+  totalRevenue      Decimal  @db.Decimal(12, 4)
+  subscriptionRev   Decimal  @db.Decimal(12, 4)
+  boostRev          Decimal  @db.Decimal(12, 4)
+  creditPackRev     Decimal  @db.Decimal(12, 4)
+  newSubscribers    Int      @default(0)
+  churned           Int      @default(0)
+  arpu              Decimal? @db.Decimal(10, 4)
+  activeSubCount    Int      @default(0)
+  currency          String   @default("USD")
+  createdAt         DateTime @default(now())
+
+  @@unique([granularity, periodStart, currency])
+  @@index([granularity, periodStart(sort: Desc)])
+}
+
+// ── SpenderSegment ────────────────────────────────────────────────────────────
+// Whale intelligence: behaviorally-derived spender segment per user.
+// Updated async by the whale-intelligence worker.
+model SpenderSegment {
+  id                 String   @id @default(uuid())
+  userId             String   @unique
+  segment            String   @default("FREE")      // FREE | CASUAL | REGULAR | WHALE | VIP
+  ltv                Decimal  @db.Decimal(12, 4)    @default(0)
+  totalSpend         Decimal  @db.Decimal(12, 4)    @default(0)
+  purchaseCount      Int      @default(0)
+  lastPurchaseAt     DateTime?
+  fatigueScore       Float    @default(0)           // 0-1, high = overexposed to offers
+  spendingRiskScore  Float    @default(0)           // 0-1, high = chargeback / refund risk
+  segmentUpdatedAt   DateTime @default(now())
+  createdAt          DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([segment])
+  @@index([ltv(sort: Desc)])
+}

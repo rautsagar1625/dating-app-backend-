@@ -1,0 +1,112 @@
+name: Deploy — Staging
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+env:
+  REGISTRY:   ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/api
+
+jobs:
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      # ── Database migration ────────────────────────────────────────────────
+      - name: Run staging migrations
+        env:
+          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+          ENVIRONMENT:  staging
+          CI:           true
+        run: bash scripts/migrate-safe.sh
+
+      # ── Deploy to ECS/K8s ────────────────────────────────────────────────
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Update ECS service (staging)
+        env:
+          IMAGE_TAG:   sha-${{ github.sha }}
+          ECS_CLUSTER: velvet-staging
+          ECS_SERVICE: velvet-api-staging
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}"
+          TASK_DEF=$(aws ecs describe-task-definition --task-definition velvet-api-staging --query taskDefinition)
+          NEW_TASK_DEF=$(echo $TASK_DEF | python3 -c "
+          import json, sys
+          td = json.load(sys.stdin)
+          td['containerDefinitions'][0]['image'] = '${IMAGE}'
+          for k in ['taskDefinitionArn','revision','status','requiresAttributes','compatibilities','registeredAt','registeredBy']:
+              td.pop(k, None)
+          print(json.dumps(td))")
+          NEW_ARN=$(aws ecs register-task-definition --cli-input-json "$NEW_TASK_DEF" --query 'taskDefinition.taskDefinitionArn' --output text)
+          aws ecs update-service --cluster ${{ env.ECS_CLUSTER }} --service ${{ env.ECS_SERVICE }} --task-definition $NEW_ARN
+
+      - name: Wait for deployment stability
+        run: |
+          aws ecs wait services-stable \
+            --cluster velvet-staging \
+            --services velvet-api-staging
+        timeout-minutes: 10
+
+      # ── Smoke tests ──────────────────────────────────────────────────────
+      - name: Run smoke tests
+        env:
+          BASE_URL: ${{ secrets.STAGING_API_URL }}
+        run: |
+          curl -sf "${BASE_URL}/live" | grep -q '"status":"ok"' || exit 1
+          curl -sf "${BASE_URL}/ready" | grep -q '"status":"ok"' || exit 1
+          echo "Smoke tests passed"
+
+      # ── Notify ───────────────────────────────────────────────────────────
+      - name: Slack notification (success)
+        if: success()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "✅ *Staging deployed* — `${{ github.sha }}` by ${{ github.actor }}",
+              "blocks": [{
+                "type": "section",
+                "text": { "type": "mrkdwn", "text": "✅ *Staging deploy succeeded*\nCommit: `${{ github.sha }}`\nBy: ${{ github.actor }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>" }
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Slack notification (failure)
+        if: failure()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "🔴 *Staging deploy FAILED* — `${{ github.sha }}` by ${{ github.actor }} — <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

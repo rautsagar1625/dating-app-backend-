@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: velvet-api
+  namespace: velvet
+  labels:
+    app: velvet-api
+    component: api
+    version: latest
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: velvet-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge:       1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: velvet-api
+        component: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "3002"
+        prometheus.io/path:   "/metrics"
+    spec:
+      # Spread pods across availability zones
+      topologySpreadConstraints:
+        - maxSkew:           1
+          topologyKey:       topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: velvet-api
+
+      # Graceful shutdown: drain connections before SIGTERM
+      terminationGracePeriodSeconds: 60
+
+      containers:
+        - name: api
+          image: ghcr.io/rautsagar1625/dating-app-backend-/api:latest  # overridden at deploy time
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3002
+              protocol: TCP
+              name: http
+
+          envFrom:
+            - secretRef:
+                name: velvet-api-secrets
+            - configMapRef:
+                name: velvet-api-config
+
+          resources:
+            requests:
+              cpu:    "250m"
+              memory: "256Mi"
+            limits:
+              cpu:    "2"
+              memory: "2Gi"
+
+          # Startup probe: give the app 60s to boot before liveness kicks in
+          startupProbe:
+            httpGet:
+              path: /live
+              port: 3002
+            failureThreshold: 30
+            periodSeconds:    2
+            timeoutSeconds:   3
+
+          # Liveness probe: restart if truly unhealthy
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 3002
+            initialDelaySeconds: 30
+            periodSeconds:       10
+            timeoutSeconds:      5
+            failureThreshold:    3
+
+          # Readiness probe: stop sending traffic if not ready
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3002
+            initialDelaySeconds: 10
+            periodSeconds:       5
+            timeoutSeconds:      3
+            failureThreshold:    3
+            successThreshold:    1
+
+          lifecycle:
+            preStop:
+              exec:
+                # Sleep 5s to allow load balancer to drain before SIGTERM
+                command: ["/bin/sh", "-c", "sleep 5"]
+
+          securityContext:
+            runAsNonRoot:             true
+            runAsUser:                1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem:   false
+            capabilities:
+              drop: [ALL]
+
+      imagePullSecrets:
+        - name: ghcr-pull-secret
+
+      serviceAccountName: velvet-api-sa

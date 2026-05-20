@@ -1,0 +1,257 @@
+groups:
+  # ── API Health ──────────────────────────────────────────────────────────────
+  - name: velvet-api-health
+    interval: 30s
+    rules:
+      - alert: APIHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+          / sum(rate(http_requests_total[5m])) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+          team:     backend
+        annotations:
+          summary: "API error rate above 5%"
+          description: "API 5xx error rate is {{ $value | humanizePercentage }}. Check Sentry for details."
+          runbook: "https://runbooks.velvet.internal/sev1-api-outage"
+
+      - alert: APIVeryHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+          / sum(rate(http_requests_total[5m])) > 0.20
+        for: 1m
+        labels:
+          severity: critical
+          team:     backend
+        annotations:
+          summary: "SEV-1: API error rate above 20%"
+          description: "API 5xx error rate is {{ $value | humanizePercentage }}. Immediate action required."
+          runbook: "https://runbooks.velvet.internal/sev1-api-outage"
+
+      - alert: APIHighLatency
+        expr: |
+          histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 2
+        for: 5m
+        labels:
+          severity: warning
+          team:     backend
+        annotations:
+          summary: "API p95 latency above 2 seconds"
+          description: "p95 response time is {{ $value }}s. Check DB query plans and Redis connectivity."
+          runbook: "https://runbooks.velvet.internal/sev1-api-outage"
+
+      - alert: APICriticalLatency
+        expr: |
+          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 5
+        for: 2m
+        labels:
+          severity: critical
+          team:     backend
+        annotations:
+          summary: "SEV-1: API p99 latency above 5 seconds"
+          description: "p99 response time is {{ $value }}s — severe degradation."
+
+      - alert: APIDown
+        expr: up{job="velvet-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team:     backend
+        annotations:
+          summary: "SEV-1: API is down"
+          description: "Prometheus cannot scrape the API. All API pods may be down."
+          runbook: "https://runbooks.velvet.internal/sev1-api-outage"
+
+  # ── Database ────────────────────────────────────────────────────────────────
+  - name: velvet-database
+    interval: 30s
+    rules:
+      - alert: DBHighConnectionCount
+        expr: velvet_db_connections_active > 40
+        for: 5m
+        labels:
+          severity: warning
+          team:     backend
+        annotations:
+          summary: "DB connection count high ({{ $value }})"
+          description: "Active DB connections at {{ $value }}. Max pool is 20 per pod × N pods. Check for connection leaks."
+          runbook: "https://runbooks.velvet.internal/db-failover"
+
+      - alert: DBPoolExhausted
+        expr: velvet_db_connections_active >= velvet_db_connections_max
+        for: 2m
+        labels:
+          severity: critical
+          team:     backend
+        annotations:
+          summary: "SEV-1: DB connection pool exhausted"
+          description: "All {{ $value }} DB connections are in use. New queries will time out."
+
+      - alert: DBSlowQueries
+        expr: |
+          histogram_quantile(0.99, rate(velvet_db_query_duration_seconds_bucket[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+          team:     backend
+        annotations:
+          summary: "DB p99 query time above 5 seconds"
+          description: "Slow queries detected. Run EXPLAIN ANALYZE on top queries from pg_stat_statements."
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  - name: velvet-redis
+    interval: 30s
+    rules:
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team:     backend
+        annotations:
+          summary: "SEV-1: Redis is down"
+          description: "Redis is unreachable. Rate limiting, caching, queues, and WebSocket rooms are affected."
+          runbook: "https://runbooks.velvet.internal/redis-incident"
+
+      - alert: RedisHighMemory
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          team:     backend
+        annotations:
+          summary: "Redis memory usage above 85%"
+          description: "Redis memory at {{ $value | humanizePercentage }}. Keys may be evicted (allkeys-lru). Review hot keys."
+
+      - alert: RedisMemoryCritical
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.95
+        for: 2m
+        labels:
+          severity: critical
+          team:     backend
+        annotations:
+          summary: "SEV-2: Redis memory critically high"
+          description: "Redis memory at {{ $value | humanizePercentage }}. Aggressive eviction likely impacting rate limiters and session state."
+
+  # ── BullMQ Queues ───────────────────────────────────────────────────────────
+  - name: velvet-queues
+    interval: 30s
+    rules:
+      - alert: QueueDepthCritical
+        expr: bullmq_queue_depth{queue="webhook-processing"} > 10000
+        for: 5m
+        labels:
+          severity: critical
+          team:     backend
+        annotations:
+          summary: "SEV-2: webhook-processing queue depth > 10,000"
+          description: "Queue has {{ $value }} waiting jobs. Worker may be down or under-scaled."
+          runbook: "https://runbooks.velvet.internal/queue-recovery"
+
+      - alert: QueueDepthHigh
+        expr: bullmq_queue_depth > 5000
+        for: 10m
+        labels:
+          severity: warning
+          team:     backend
+        annotations:
+          summary: "Queue {{ $labels.queue }} depth above 5,000"
+          description: "Queue {{ $labels.queue }} has {{ $value }} waiting jobs."
+
+      - alert: QueueWorkersStopped
+        expr: bullmq_workers_active == 0
+        for: 2m
+        labels:
+          severity: critical
+          team:     backend
+        annotations:
+          summary: "SEV-1: No active BullMQ workers"
+          description: "Zero workers processing jobs. All queues will accumulate indefinitely."
+          runbook: "https://runbooks.velvet.internal/queue-recovery"
+
+      - alert: QueueFailedJobsAccumulating
+        expr: rate(bullmq_jobs_failed_total[10m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          team:     backend
+        annotations:
+          summary: "Jobs failing at high rate ({{ $value }}/s)"
+          description: "{{ $value }} jobs/second failing. Check dead-letter queue and worker logs."
+
+  # ── Payments ────────────────────────────────────────────────────────────────
+  - name: velvet-payments
+    interval: 30s
+    rules:
+      - alert: PaymentHighFailureRate
+        expr: |
+          rate(velvet_payment_failed_total[5m])
+          / rate(velvet_payment_session_created_total[5m]) > 0.10
+        for: 5m
+        labels:
+          severity: critical
+          team:     backend
+        annotations:
+          summary: "SEV-2: Payment failure rate above 10%"
+          description: "Payment failure rate at {{ $value | humanizePercentage }}. Check Stripe/Razorpay dashboard."
+          runbook: "https://runbooks.velvet.internal/payment-incident"
+
+      - alert: StuckProcessingSessions
+        expr: velvet_payment_stuck_processing_total > 5
+        for: 10m
+        labels:
+          severity: warning
+          team:     backend
+        annotations:
+          summary: "Payment sessions stuck in PROCESSING state"
+          description: "{{ $value }} payment sessions stuck > 15 min. Run reconciliation or check provider."
+
+  # ── WebSockets ──────────────────────────────────────────────────────────────
+  - name: velvet-websockets
+    interval: 30s
+    rules:
+      - alert: WebSocketConnectionsDraining
+        expr: deriv(velvet_socket_connections_active[10m]) < -500
+        for: 3m
+        labels:
+          severity: critical
+          team:     backend
+        annotations:
+          summary: "SEV-2: Rapid WebSocket connection drop"
+          description: "WebSocket connections dropping at {{ $value }}/min. Pod restart or network issue."
+          runbook: "https://runbooks.velvet.internal/websocket-incident"
+
+      - alert: WebSocketMessageDropRate
+        expr: rate(velvet_socket_message_failed_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+          team:     backend
+        annotations:
+          summary: "WebSocket message delivery failures"
+          description: "{{ $value }} message failures/second. Check Redis pub/sub adapter."
+
+  # ── Security ────────────────────────────────────────────────────────────────
+  - name: velvet-security
+    interval: 60s
+    rules:
+      - alert: AuthBruteForce
+        expr: rate(velvet_auth_failed_total[5m]) > 50
+        for: 2m
+        labels:
+          severity: warning
+          team:     security
+        annotations:
+          summary: "Possible auth brute force ({{ $value }} failures/s)"
+          description: "High authentication failure rate. May be credential stuffing or brute force."
+
+      - alert: AbusePatternSpike
+        expr: rate(velvet_abuse_detected_total[5m]) > 20
+        for: 3m
+        labels:
+          severity: warning
+          team:     security
+        annotations:
+          summary: "Abuse pattern detection spike"
+          description: "{{ $value }} suspicious requests/second. Scanner or automated attack in progress."
