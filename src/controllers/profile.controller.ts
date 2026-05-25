@@ -1,6 +1,22 @@
 import { Request, Response, NextFunction } from 'express';
 import prisma from '../services/prisma.service';
 
+// ── Profile completion calculation ───────────────────────────────────────────
+export function calcCompletion(profile: any, photoCount: number): { score: number; steps: { label: string; done: boolean }[] } {
+  const steps = [
+    { label: 'Add a username',   done: !!profile?.username },
+    { label: 'Set your age',     done: !!profile?.age },
+    { label: 'Add your gender',  done: !!profile?.gender },
+    { label: 'Add location',     done: !!profile?.location },
+    { label: 'Write a bio',      done: !!(profile?.bio && profile.bio.length >= 10) },
+    { label: 'Upload a photo',   done: photoCount > 0 },
+    { label: 'Add 3+ photos',    done: photoCount >= 3 },
+  ];
+  const done  = steps.filter((s) => s.done).length;
+  const score = Math.round((done / steps.length) * 100);
+  return { score, steps };
+}
+
 // Shapes a profile row into the public-safe object
 const formatProfile = (profile: any, isOwner: boolean) => ({
   userId: profile.userId,
@@ -99,6 +115,23 @@ export const upsertProfile = async (req: Request, res: Response, next: NextFunct
       res.status(409).json({ success: false, message: 'Username already taken' });
       return;
     }
+    next(error);
+  }
+};
+
+// GET /api/profile/completion  (own profile completion %)
+export const getCompletion = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const userId = req.user!.userId;
+
+    const [profile, photoCount] = await prisma.$transaction([
+      prisma.profile.findUnique({ where: { userId } }),
+      prisma.photo.count({ where: { userId, isPrivate: false } }),
+    ]);
+
+    const result = calcCompletion(profile, photoCount);
+    res.json({ success: true, data: result });
+  } catch (error) {
     next(error);
   }
 };

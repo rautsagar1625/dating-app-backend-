@@ -28,6 +28,9 @@ import paymentRoutes from './payment.routes';
 import subscriptionRoutes from './subscription.routes';
 import boostRoutes from './boost.routes';
 import offerRoutes from './offer.routes';
+import giftRoutes from './gift.routes';
+import newsRoutes from './news.routes';
+import notesRoutes from './notes.routes';
 
 const router = Router();
 
@@ -60,5 +63,8 @@ router.use('/payments',      paymentRoutes);
 router.use('/subscriptions', subscriptionRoutes);
 router.use('/boosts',        boostRoutes);
 router.use('/offers',        offerRoutes);
+router.use('/gifts',         giftRoutes);
+router.use('/news',          newsRoutes);
+router.use('/notes',         notesRoutes);
 
 export default router;
